@@ -1,0 +1,8 @@
+Simple recipe
+
+Ingredients:
+- 1 cup flour
+- 1 cup sugar
+
+Instructions:
+Mix ingredients and bake.
