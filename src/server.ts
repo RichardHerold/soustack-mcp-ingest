@@ -425,10 +425,10 @@ const parseToSoustackInput = (
     if (!isRecord(input.options)) {
       errors.push("options must be an object when provided.");
     } else if ("sourcePath" in input.options) {
-      if (typeof input.options.sourcePath === "string" && input.options.sourcePath.length > 0) {
+      if (typeof input.options.sourcePath === "string") {
         options = { sourcePath: input.options.sourcePath };
       } else if (input.options.sourcePath !== undefined) {
-        errors.push("options.sourcePath must be a non-empty string when provided.");
+        errors.push("options.sourcePath must be a string when provided.");
       }
     }
   }
@@ -613,26 +613,14 @@ const tools: Record<string, ToolHandler> = {
   "ingest.toSoustack": async (input) => {
     const parsed = parseToSoustackInput(input);
     if (!parsed.value) {
-      return {
-        recipe: {},
-        errors: parsed.errors
-      };
+      throw new Error(parsed.errors.join(" "));
     }
 
-    try {
-      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
-      const toSoustack = resolveToSoustackStage(ingestModule);
-      const options = parsed.value.options?.sourcePath
-        ? { sourcePath: parsed.value.options.sourcePath }
-        : undefined;
-      const recipe = await toSoustack(parsed.value.intermediate, options);
-      return { recipe: recipe as object };
-    } catch (error) {
-      return {
-        recipe: {},
-        errors: [error instanceof Error ? error.message : String(error)]
-      };
-    }
+    const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
+    const toSoustack = resolveToSoustackStage(ingestModule);
+    const options = parsed.value.options?.sourcePath ? { sourcePath: parsed.value.options.sourcePath } : undefined;
+    const recipe = await toSoustack(parsed.value.intermediate, options);
+    return { recipe: recipe as object };
   }
 };
 
