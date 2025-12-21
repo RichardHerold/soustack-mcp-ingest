@@ -10,6 +10,40 @@ type ServerOptions = {
   output: NodeJS.WritableStream;
 };
 
+type IngestDocumentOptions = {
+  emitFiles?: boolean;
+  returnRecipes?: boolean;
+  maxRecipes?: number | null;
+  strictValidation?: boolean;
+};
+
+type IngestDocumentInput = {
+  inputPath: string;
+  outDir?: string;
+  options?: IngestDocumentOptions;
+};
+
+type IngestDocumentEmitted = {
+  outDir: string;
+  indexPath: string;
+  recipesDir: string;
+  count: number;
+};
+
+type IngestDocumentRecipe = {
+  name: string;
+  slug: string;
+  recipe: object;
+};
+
+type IngestDocumentOutput = {
+  ok: boolean;
+  source: { inputPath: string };
+  recipes?: IngestDocumentRecipe[];
+  emitted?: IngestDocumentEmitted;
+  errors: string[];
+};
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
@@ -28,6 +62,218 @@ const readPackageVersion = async (packageName?: string): Promise<string | null> 
   }
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object";
+
+const buildErrorList = (value: unknown): string[] => {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const errors = value.errors;
+  if (!Array.isArray(errors)) {
+    return [];
+  }
+
+  return errors.map((error) => String(error));
+};
+
+const isEmitted = (value: unknown): value is IngestDocumentEmitted => {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.outDir === "string" &&
+    typeof value.indexPath === "string" &&
+    typeof value.recipesDir === "string" &&
+    typeof value.count === "number"
+  );
+};
+
+const extractEmitted = (value: unknown): IngestDocumentEmitted | undefined => {
+  if (isRecord(value) && isEmitted(value.emitted)) {
+    return value.emitted;
+  }
+
+  if (isEmitted(value)) {
+    return value;
+  }
+
+  return undefined;
+};
+
+const extractRecipes = (value: unknown): IngestDocumentRecipe[] => {
+  if (!isRecord(value) || !Array.isArray(value.recipes)) {
+    return [];
+  }
+
+  return value.recipes as IngestDocumentRecipe[];
+};
+
+const resolveIngestHandler = (
+  ingestModule: Record<string, unknown>
+): ((input: Record<string, unknown>) => Promise<unknown>) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.ingestDocument,
+    ingestModule.ingest,
+    ingestModule.runIngest,
+    ingestModule.run,
+    defaultExport,
+    isRecord(defaultExport) ? defaultExport.ingestDocument : undefined,
+    isRecord(defaultExport) ? defaultExport.ingest : undefined,
+    isRecord(defaultExport) ? defaultExport.runIngest : undefined,
+    isRecord(defaultExport) ? defaultExport.run : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose a usable ingest function.");
+  }
+
+  return handler as (input: Record<string, unknown>) => Promise<unknown>;
+};
+
+const normalizeIngestResult = (
+  result: unknown,
+  request: IngestDocumentInput
+): IngestDocumentOutput => {
+  const source = { inputPath: request.inputPath };
+  const emitFiles = request.options?.emitFiles ?? Boolean(request.outDir);
+  const returnRecipes = request.options?.returnRecipes ?? true;
+  const errors = buildErrorList(result);
+
+  if (isRecord(result) && result.ok === false) {
+    return {
+      ok: false,
+      source,
+      errors: errors.length > 0 ? errors : ["Ingest pipeline reported failure."]
+    };
+  }
+
+  const output: IngestDocumentOutput = {
+    ok: true,
+    source,
+    errors
+  };
+
+  if (returnRecipes) {
+    output.recipes = extractRecipes(result);
+  }
+
+  if (emitFiles) {
+    const emitted = extractEmitted(result);
+    if (emitted) {
+      output.emitted = emitted;
+    }
+  }
+
+  return output;
+};
+
+const parseIngestInput = (
+  input: Record<string, unknown>
+): { value?: IngestDocumentInput; errors: string[]; source: { inputPath: string } } => {
+  const errors: string[] = [];
+  const inputPath = typeof input.inputPath === "string" ? input.inputPath : "";
+  const source = { inputPath };
+
+  if (!inputPath) {
+    errors.push("inputPath must be a non-empty string.");
+  }
+
+  let outDir: string | undefined;
+  if ("outDir" in input) {
+    if (typeof input.outDir === "string") {
+      outDir = input.outDir;
+    } else if (input.outDir !== undefined) {
+      errors.push("outDir must be a string when provided.");
+    }
+  }
+
+  let options: IngestDocumentOptions | undefined;
+  if ("options" in input && input.options !== undefined) {
+    if (!isRecord(input.options)) {
+      errors.push("options must be an object when provided.");
+    } else {
+      options = {};
+
+      if ("emitFiles" in input.options) {
+        if (typeof input.options.emitFiles === "boolean") {
+          options.emitFiles = input.options.emitFiles;
+        } else if (input.options.emitFiles !== undefined) {
+          errors.push("options.emitFiles must be a boolean when provided.");
+        }
+      }
+
+      if ("returnRecipes" in input.options) {
+        if (typeof input.options.returnRecipes === "boolean") {
+          options.returnRecipes = input.options.returnRecipes;
+        } else if (input.options.returnRecipes !== undefined) {
+          errors.push("options.returnRecipes must be a boolean when provided.");
+        }
+      }
+
+      if ("maxRecipes" in input.options) {
+        const value = input.options.maxRecipes;
+        if (value === null || typeof value === "number") {
+          options.maxRecipes = value as number | null;
+        } else if (value !== undefined) {
+          errors.push("options.maxRecipes must be a number or null when provided.");
+        }
+      }
+
+      if ("strictValidation" in input.options) {
+        if (typeof input.options.strictValidation === "boolean") {
+          options.strictValidation = input.options.strictValidation;
+        } else if (input.options.strictValidation !== undefined) {
+          errors.push("options.strictValidation must be a boolean when provided.");
+        }
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { errors, source };
+  }
+
+  return {
+    errors,
+    source,
+    value: {
+      inputPath,
+      outDir,
+      options
+    }
+  };
+};
+
+const buildIngestRequest = (input: IngestDocumentInput): Record<string, unknown> => {
+  const emitFiles = input.options?.emitFiles ?? Boolean(input.outDir);
+  const returnRecipes = input.options?.returnRecipes ?? true;
+
+  const request: Record<string, unknown> = {
+    inputPath: input.inputPath,
+    emitFiles,
+    returnRecipes
+  };
+
+  if (input.outDir) {
+    request.outDir = input.outDir;
+  }
+
+  if (input.options && "maxRecipes" in input.options) {
+    request.maxRecipes = input.options.maxRecipes;
+  }
+
+  if (input.options && "strictValidation" in input.options) {
+    request.strictValidation = input.options.strictValidation;
+  }
+
+  return request;
+};
+
 const tools: Record<string, ToolHandler> = {
   ping: async () => ({ pong: true }),
   "ingest.meta": async () => {
@@ -44,6 +290,29 @@ const tools: Record<string, ToolHandler> = {
       supportedInputKinds: [...supportedInputKinds],
       timestamp: new Date().toISOString()
     };
+  },
+  "ingest.document": async (input) => {
+    const parsed = parseIngestInput(input);
+    if (!parsed.value) {
+      return {
+        ok: false,
+        source: parsed.source,
+        errors: parsed.errors
+      };
+    }
+
+    try {
+      const ingestModule = (await import("soustack-ingest")) as Record<string, unknown>;
+      const handler = resolveIngestHandler(ingestModule);
+      const result = await handler(buildIngestRequest(parsed.value));
+      return normalizeIngestResult(result, parsed.value);
+    } catch (error) {
+      return {
+        ok: false,
+        source: parsed.source,
+        errors: [error instanceof Error ? error.message : String(error)]
+      };
+    }
   }
 };
 
