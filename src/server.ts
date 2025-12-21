@@ -66,6 +66,28 @@ type SegmentOutput = {
   errors?: string[];
 };
 
+type ToSoustackSource = {
+  startLine?: number;
+  endLine?: number;
+  evidence?: string;
+};
+
+type ToSoustackIntermediate = {
+  title: string;
+  ingredients: string[];
+  instructions: string[];
+  source?: ToSoustackSource;
+};
+
+type ToSoustackOptions = {
+  sourcePath?: string;
+};
+
+type ToSoustackInput = {
+  intermediate: ToSoustackIntermediate;
+  options?: ToSoustackOptions;
+};
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
@@ -338,6 +360,97 @@ const parseSegmentInput = (input: Record<string, unknown>): { value?: SegmentInp
   };
 };
 
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const parseToSoustackInput = (
+  input: Record<string, unknown>
+): { value?: ToSoustackInput; errors: string[] } => {
+  const errors: string[] = [];
+
+  if (!isRecord(input.intermediate)) {
+    errors.push("intermediate must be an object.");
+  }
+
+  const intermediateRecord = isRecord(input.intermediate) ? input.intermediate : {};
+  const title = typeof intermediateRecord.title === "string" ? intermediateRecord.title : "";
+
+  if (!title) {
+    errors.push("intermediate.title must be a non-empty string.");
+  }
+
+  if (!isStringArray(intermediateRecord.ingredients)) {
+    errors.push("intermediate.ingredients must be an array of strings.");
+  }
+
+  if (!isStringArray(intermediateRecord.instructions)) {
+    errors.push("intermediate.instructions must be an array of strings.");
+  }
+
+  let source: ToSoustackSource | undefined;
+  if ("source" in intermediateRecord && intermediateRecord.source !== undefined) {
+    if (!isRecord(intermediateRecord.source)) {
+      errors.push("intermediate.source must be an object when provided.");
+    } else {
+      source = {};
+
+      if ("startLine" in intermediateRecord.source) {
+        if (typeof intermediateRecord.source.startLine === "number") {
+          source.startLine = intermediateRecord.source.startLine;
+        } else if (intermediateRecord.source.startLine !== undefined) {
+          errors.push("intermediate.source.startLine must be a number when provided.");
+        }
+      }
+
+      if ("endLine" in intermediateRecord.source) {
+        if (typeof intermediateRecord.source.endLine === "number") {
+          source.endLine = intermediateRecord.source.endLine;
+        } else if (intermediateRecord.source.endLine !== undefined) {
+          errors.push("intermediate.source.endLine must be a number when provided.");
+        }
+      }
+
+      if ("evidence" in intermediateRecord.source) {
+        if (typeof intermediateRecord.source.evidence === "string") {
+          source.evidence = intermediateRecord.source.evidence;
+        } else if (intermediateRecord.source.evidence !== undefined) {
+          errors.push("intermediate.source.evidence must be a string when provided.");
+        }
+      }
+    }
+  }
+
+  let options: ToSoustackOptions | undefined;
+  if ("options" in input && input.options !== undefined) {
+    if (!isRecord(input.options)) {
+      errors.push("options must be an object when provided.");
+    } else if ("sourcePath" in input.options) {
+      if (typeof input.options.sourcePath === "string" && input.options.sourcePath.length > 0) {
+        options = { sourcePath: input.options.sourcePath };
+      } else if (input.options.sourcePath !== undefined) {
+        errors.push("options.sourcePath must be a non-empty string when provided.");
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { errors };
+  }
+
+  return {
+    errors,
+    value: {
+      intermediate: {
+        title,
+        ingredients: intermediateRecord.ingredients as string[],
+        instructions: intermediateRecord.instructions as string[],
+        source
+      },
+      options
+    }
+  };
+};
+
 const resolveNormalizeStage = (
   ingestModule: Record<string, unknown>
 ): ((input: unknown) => Promise<unknown> | unknown) => {
@@ -378,6 +491,23 @@ const resolveSegmentStage = (
   }
 
   return handler as (input: unknown, options?: SegmentOptions) => Promise<unknown> | unknown;
+};
+
+const resolveToSoustackStage = (
+  ingestModule: Record<string, unknown>
+): ((intermediate: ToSoustackIntermediate, options?: ToSoustackOptions) => Promise<unknown> | unknown) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.toSoustack,
+    isRecord(defaultExport) ? defaultExport.toSoustack : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose a toSoustack stage.");
+  }
+
+  return handler as (intermediate: ToSoustackIntermediate, options?: ToSoustackOptions) => Promise<unknown> | unknown;
 };
 
 const runNormalizeStage = async (normalize: (input: unknown) => Promise<unknown> | unknown, text: string) => {
@@ -476,6 +606,30 @@ const tools: Record<string, ToolHandler> = {
     } catch (error) {
       return {
         chunks: [],
+        errors: [error instanceof Error ? error.message : String(error)]
+      };
+    }
+  },
+  "ingest.toSoustack": async (input) => {
+    const parsed = parseToSoustackInput(input);
+    if (!parsed.value) {
+      return {
+        recipe: {},
+        errors: parsed.errors
+      };
+    }
+
+    try {
+      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
+      const toSoustack = resolveToSoustackStage(ingestModule);
+      const options = parsed.value.options?.sourcePath
+        ? { sourcePath: parsed.value.options.sourcePath }
+        : undefined;
+      const recipe = await toSoustack(parsed.value.intermediate, options);
+      return { recipe: recipe as object };
+    } catch (error) {
+      return {
+        recipe: {},
         errors: [error instanceof Error ? error.message : String(error)]
       };
     }

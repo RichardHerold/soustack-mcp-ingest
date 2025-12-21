@@ -10,6 +10,23 @@ type SegmentChunk = {
   evidence?: string;
 };
 
+type ToSoustackSource = {
+  startLine?: number;
+  endLine?: number;
+  evidence?: string;
+};
+
+type ToSoustackIntermediate = {
+  title: string;
+  ingredients: string[];
+  instructions: string[];
+  source?: ToSoustackSource;
+};
+
+type ToSoustackOptions = {
+  sourcePath?: string;
+};
+
 const resolveText = (input: string | { text: string }): string =>
   typeof input === "string" ? input : input.text;
 
@@ -69,7 +86,25 @@ export const segment = (
   return { chunks };
 };
 
+export const toSoustack = (intermediate: ToSoustackIntermediate, options?: ToSoustackOptions): object => {
+  const recipe: Record<string, unknown> = {
+    name: intermediate.title,
+    ingredients: intermediate.ingredients,
+    instructions: intermediate.instructions
+  };
+
+  if (options?.sourcePath) {
+    recipe["x-ingest"] = {
+      sourcePath: options.sourcePath,
+      source: intermediate.source ?? null
+    };
+  }
+
+  return recipe;
+};
+
 export default {
   normalize,
-  segment
+  segment,
+  toSoustack
 };
