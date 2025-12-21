@@ -1,0 +1,26 @@
+{
+  "name": "@soustack/mcp-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "soustack-mcp-ingest": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "soustack": "*",
+    "soustack-ingest": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.5"
+  }
+}
