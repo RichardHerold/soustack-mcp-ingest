@@ -154,9 +154,29 @@ export const toSoustack = (
   }
 });
 
+export const validate = (
+  recipe: { name?: string | null }
+): {
+  ok: boolean;
+  errors: string[];
+} => {
+  if (!recipe.name || !recipe.name.trim()) {
+    return {
+      ok: false,
+      errors: ["name is required."]
+    };
+  }
+
+  return {
+    ok: true,
+    errors: []
+  };
+};
+
 export default {
   normalize,
   segment,
   extract,
-  toSoustack
+  toSoustack,
+  validate
 };

@@ -60,6 +60,14 @@ Segments raw text into chunks using the `soustack-ingest` module.
 {"id":"segment-1","tool":"ingest.segment","input":{"text":"# Title\n\nFirst paragraph.\n\nSecond paragraph.","options":{"maxChunks":2}}}
 ```
 
+### `ingest.validate`
+
+Validates a Soustack recipe payload.
+
+```json
+{"id":"validate-1","tool":"ingest.validate","input":{"recipe":{"name":"Sample","ingredients":[],"instructions":[]}}}
+```
+
 ### `ingest.document`
 
 Runs the end-to-end ingest pipeline on a file or directory.
@@ -70,7 +78,7 @@ Runs the end-to-end ingest pipeline on a file or directory.
 
 ## Workflow example (stage-by-stage + end-to-end)
 
-Below is a full workflow showing how the stages relate. `ingest.extract`, `ingest.toSoustack`, and `ingest.validate` are internal stage names from the `soustack-ingest` module; they are executed inside the `ingest.document` tool and are not exposed as separate MCP tools.
+Below is a full workflow showing how the stages relate. `ingest.extract`, `ingest.toSoustack`, and `ingest.validate` are stages from the `soustack-ingest` module; they are executed inside the `ingest.document` tool and are also exposed as separate MCP tools.
 
 1) **`ingest.segment`** — split text into chunks for downstream processing.
 
