@@ -27,6 +27,10 @@ type IntermediateRecipe = {
   };
 };
 
+type ToSoustackOptions = {
+  sourcePath?: string;
+};
+
 const resolveText = (input: string | { text: string }): string =>
   typeof input === "string" ? input : input.text;
 
@@ -129,8 +133,30 @@ export const extract = (chunk: ExtractChunk, lines: string[]): IntermediateRecip
   };
 };
 
+export const toSoustack = (
+  intermediate: IntermediateRecipe,
+  options?: ToSoustackOptions
+): {
+  name: string;
+  ingredients: string[];
+  instructions: string[];
+  "x-ingest": {
+    sourcePath?: string;
+    source: IntermediateRecipe["source"];
+  };
+} => ({
+  name: intermediate.title,
+  ingredients: [...intermediate.ingredients],
+  instructions: [...intermediate.instructions],
+  "x-ingest": {
+    sourcePath: options?.sourcePath,
+    source: intermediate.source
+  }
+});
+
 export default {
   normalize,
   segment,
-  extract
+  extract,
+  toSoustack
 };

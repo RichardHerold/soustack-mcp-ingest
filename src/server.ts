@@ -88,6 +88,30 @@ type IntermediateRecipe = {
   };
 };
 
+type IntermediateRecipeInput = {
+  title: string;
+  ingredients: string[];
+  instructions: string[];
+  source?: {
+    startLine?: number;
+    endLine?: number;
+    evidence?: string;
+  };
+};
+
+type ToSoustackOptions = {
+  sourcePath?: string;
+};
+
+type ToSoustackInput = {
+  intermediate: IntermediateRecipeInput;
+  options?: ToSoustackOptions;
+};
+
+type ToSoustackOutput = {
+  recipe: object;
+};
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
@@ -420,6 +444,103 @@ const parseExtractInput = (input: Record<string, unknown>): { value?: ExtractInp
   };
 };
 
+const parseIntermediateInput = (
+  input: Record<string, unknown>,
+  errors: string[]
+): IntermediateRecipeInput | undefined => {
+  const intermediate = input.intermediate;
+  if (!isRecord(intermediate)) {
+    errors.push("intermediate must be an object.");
+    return undefined;
+  }
+
+  const title = intermediate.title;
+  if (typeof title !== "string" || !title.trim()) {
+    errors.push("intermediate.title must be a non-empty string.");
+  }
+
+  const ingredients = intermediate.ingredients;
+  if (!Array.isArray(ingredients) || ingredients.some((item) => typeof item !== "string")) {
+    errors.push("intermediate.ingredients must be an array of strings.");
+  }
+
+  const instructions = intermediate.instructions;
+  if (!Array.isArray(instructions) || instructions.some((item) => typeof item !== "string")) {
+    errors.push("intermediate.instructions must be an array of strings.");
+  }
+
+  const source = intermediate.source;
+  if (source !== undefined) {
+    if (!isRecord(source)) {
+      errors.push("intermediate.source must be an object when provided.");
+    } else {
+      const startLine = source.startLine;
+      const endLine = source.endLine;
+      const evidence = source.evidence;
+
+      if (startLine !== undefined && (typeof startLine !== "number" || !Number.isFinite(startLine))) {
+        errors.push("intermediate.source.startLine must be a number when provided.");
+      }
+
+      if (endLine !== undefined && (typeof endLine !== "number" || !Number.isFinite(endLine))) {
+        errors.push("intermediate.source.endLine must be a number when provided.");
+      }
+
+      if (typeof startLine === "number" && typeof endLine === "number" && startLine > endLine) {
+        errors.push("intermediate.source.startLine must be less than or equal to intermediate.source.endLine.");
+      }
+
+      if (evidence !== undefined && typeof evidence !== "string") {
+        errors.push("intermediate.source.evidence must be a string when provided.");
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return undefined;
+  }
+
+  return {
+    title: title as string,
+    ingredients: ingredients as string[],
+    instructions: instructions as string[],
+    source: source as IntermediateRecipeInput["source"]
+  };
+};
+
+const parseToSoustackInput = (input: Record<string, unknown>): { value?: ToSoustackInput; errors: string[] } => {
+  const errors: string[] = [];
+  const intermediate = parseIntermediateInput(input, errors);
+
+  let options: ToSoustackOptions | undefined;
+  if ("options" in input && input.options !== undefined) {
+    if (!isRecord(input.options)) {
+      errors.push("options must be an object when provided.");
+    } else {
+      options = {};
+      if ("sourcePath" in input.options) {
+        if (typeof input.options.sourcePath === "string") {
+          options.sourcePath = input.options.sourcePath;
+        } else if (input.options.sourcePath !== undefined) {
+          errors.push("options.sourcePath must be a string when provided.");
+        }
+      }
+    }
+  }
+
+  if (errors.length > 0 || !intermediate) {
+    return { errors };
+  }
+
+  return {
+    errors,
+    value: {
+      intermediate,
+      options
+    }
+  };
+};
+
 const resolveNormalizeStage = (
   ingestModule: Record<string, unknown>
 ): ((input: unknown) => Promise<unknown> | unknown) => {
@@ -483,6 +604,25 @@ const resolveExtractStage = (
   }
 
   return handler as (chunk: ExtractChunk, lines: string[]) => Promise<unknown> | unknown;
+};
+
+const resolveToSoustackStage = (
+  ingestModule: Record<string, unknown>
+): ((intermediate: IntermediateRecipeInput, options?: ToSoustackOptions) => Promise<unknown> | unknown) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.toSoustack,
+    isRecord(defaultExport) ? defaultExport.toSoustack : undefined,
+    isRecord(defaultExport) && isRecord(defaultExport.stages) ? defaultExport.stages.toSoustack : undefined,
+    isRecord(ingestModule.stages) ? ingestModule.stages.toSoustack : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose a toSoustack stage.");
+  }
+
+  return handler as (intermediate: IntermediateRecipeInput, options?: ToSoustackOptions) => Promise<unknown> | unknown;
 };
 
 const runNormalizeStage = async (normalize: (input: unknown) => Promise<unknown> | unknown, text: string) => {
@@ -617,6 +757,27 @@ const tools: Record<string, ToolHandler> = {
     } catch (error) {
       return {
         intermediate: null,
+        errors: [error instanceof Error ? error.message : String(error)]
+      };
+    }
+  },
+  "ingest.toSoustack": async (input) => {
+    const parsed = parseToSoustackInput(input);
+    if (!parsed.value) {
+      return {
+        recipe: null,
+        errors: parsed.errors
+      };
+    }
+
+    try {
+      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
+      const toSoustack = resolveToSoustackStage(ingestModule);
+      const recipe = await toSoustack(parsed.value.intermediate, parsed.value.options);
+      return { recipe: recipe as object } as ToSoustackOutput;
+    } catch (error) {
+      return {
+        recipe: null,
         errors: [error instanceof Error ? error.message : String(error)]
       };
     }
