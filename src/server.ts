@@ -66,6 +66,15 @@ type SegmentOutput = {
   errors?: string[];
 };
 
+type ValidateInput = {
+  recipe: object;
+};
+
+type ValidationResult = {
+  ok: boolean;
+  errors: string[];
+};
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
@@ -338,6 +347,26 @@ const parseSegmentInput = (input: Record<string, unknown>): { value?: SegmentInp
   };
 };
 
+const parseValidateInput = (input: Record<string, unknown>): { value?: ValidateInput; errors: string[] } => {
+  const errors: string[] = [];
+  const recipe = input.recipe;
+
+  if (!isRecord(recipe)) {
+    errors.push("recipe must be an object.");
+  }
+
+  if (errors.length > 0) {
+    return { errors };
+  }
+
+  return {
+    errors,
+    value: {
+      recipe
+    }
+  };
+};
+
 const resolveNormalizeStage = (
   ingestModule: Record<string, unknown>
 ): ((input: unknown) => Promise<unknown> | unknown) => {
@@ -356,6 +385,27 @@ const resolveNormalizeStage = (
   }
 
   return handler as (input: unknown) => Promise<unknown> | unknown;
+};
+
+const resolveValidateStage = (
+  ingestModule: Record<string, unknown>
+): ((recipe: unknown) => Promise<unknown> | unknown) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.validate,
+    ingestModule.validateRecipe,
+    isRecord(defaultExport) ? defaultExport.validate : undefined,
+    isRecord(defaultExport) ? defaultExport.validateRecipe : undefined,
+    isRecord(defaultExport) && isRecord(defaultExport.stages) ? defaultExport.stages.validate : undefined,
+    isRecord(ingestModule.stages) ? ingestModule.stages.validate : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose a validate stage.");
+  }
+
+  return handler as (recipe: unknown) => Promise<unknown> | unknown;
 };
 
 const resolveSegmentStage = (
@@ -378,6 +428,27 @@ const resolveSegmentStage = (
   }
 
   return handler as (input: unknown, options?: SegmentOptions) => Promise<unknown> | unknown;
+};
+
+const normalizeValidationResult = (result: unknown): ValidationResult => {
+  const errors = buildErrorList(result);
+
+  if (isRecord(result) && typeof result.ok === "boolean") {
+    if (!result.ok && errors.length === 0) {
+      return { ok: false, errors: ["Validation failed."] };
+    }
+    return { ok: result.ok, errors };
+  }
+
+  if (Array.isArray(result)) {
+    return { ok: false, errors: result.map((error) => String(error)) };
+  }
+
+  if (typeof result === "boolean") {
+    return result ? { ok: true, errors: [] } : { ok: false, errors: ["Validation failed."] };
+  }
+
+  return { ok: errors.length === 0, errors };
 };
 
 const runNormalizeStage = async (normalize: (input: unknown) => Promise<unknown> | unknown, text: string) => {
@@ -476,6 +547,27 @@ const tools: Record<string, ToolHandler> = {
     } catch (error) {
       return {
         chunks: [],
+        errors: [error instanceof Error ? error.message : String(error)]
+      };
+    }
+  },
+  "ingest.validate": async (input) => {
+    const parsed = parseValidateInput(input);
+    if (!parsed.value) {
+      return {
+        ok: false,
+        errors: parsed.errors
+      };
+    }
+
+    try {
+      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
+      const validate = resolveValidateStage(ingestModule);
+      const result = await validate(parsed.value.recipe);
+      return normalizeValidationResult(result);
+    } catch (error) {
+      return {
+        ok: false,
         errors: [error instanceof Error ? error.message : String(error)]
       };
     }

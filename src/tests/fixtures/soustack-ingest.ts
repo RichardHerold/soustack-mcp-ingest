@@ -69,7 +69,16 @@ export const segment = (
   return { chunks };
 };
 
+export const validate = (recipe: unknown): { ok: boolean; errors: string[] } => {
+  if (recipe && typeof recipe === "object" && "name" in recipe && typeof recipe.name === "string") {
+    return { ok: true, errors: [] };
+  }
+
+  return { ok: false, errors: ["Recipe name is required."] };
+};
+
 export default {
   normalize,
-  segment
+  segment,
+  validate
 };
