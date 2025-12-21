@@ -60,6 +60,22 @@ Segments raw text into chunks using the `soustack-ingest` module.
 {"id":"segment-1","tool":"ingest.segment","input":{"text":"# Title\n\nFirst paragraph.\n\nSecond paragraph.","options":{"maxChunks":2}}}
 ```
 
+### `ingest.extract`
+
+Extracts an intermediate recipe from a chunk.
+
+```json
+{"id":"extract-1","tool":"ingest.extract","input":{"text":"# Title\n\nIngredients:\n- eggs\n- butter\n\nSteps:\n1. Mix.\n2. Cook.","chunk":{"startLine":1,"endLine":8,"titleGuess":"Title"}}}
+```
+
+### `ingest.toSoustack`
+
+Converts an intermediate recipe into a Soustack recipe.
+
+```json
+{"id":"to-soustack-1","tool":"ingest.toSoustack","input":{"intermediate":{"title":"Scrambled Eggs","ingredients":["2 eggs","1 tbsp butter"],"instructions":["Whisk eggs.","Cook in butter."],"source":{"startLine":1,"endLine":4,"evidence":"Scrambled Eggs"}},"options":{"sourcePath":"/recipes/breakfast.md"}}}
+```
+
 ### `ingest.validate`
 
 Validates a Soustack recipe payload.
@@ -88,9 +104,21 @@ Below is a full workflow showing how the stages relate. `ingest.extract`, `inges
 
 2) **`ingest.extract`** — extract structured data from each chunk.
 
+```json
+{"id":"workflow-extract-1","tool":"ingest.extract","input":{"text":"# Intro\n\nHello world.\n\n## Details\nMore text here.","chunk":{"startLine":1,"endLine":4,"titleGuess":"Intro"}}}
+```
+
 3) **`ingest.toSoustack`** — convert extracted data into Soustack recipes.
 
+```json
+{"id":"workflow-to-soustack-1","tool":"ingest.toSoustack","input":{"intermediate":{"title":"Intro","ingredients":["Hello world"],"instructions":["More text here."],"source":{"startLine":1,"endLine":4,"evidence":"# Intro"}},"options":{"sourcePath":"/docs/example.md"}}}
+```
+
 4) **`ingest.validate`** — validate recipes against Soustack rules.
+
+```json
+{"id":"workflow-validate-1","tool":"ingest.validate","input":{"recipe":{"name":"Intro","ingredients":["Hello world"],"instructions":["More text here."]}}}
+```
 
 5) **`ingest.document`** — run all stages end-to-end on disk input.
 
