@@ -44,6 +44,28 @@ type IngestDocumentOutput = {
   errors: string[];
 };
 
+type SegmentOptions = {
+  maxChunks?: number | null;
+};
+
+type SegmentInput = {
+  text: string;
+  options?: SegmentOptions;
+};
+
+type SegmentChunk = {
+  startLine: number;
+  endLine: number;
+  titleGuess?: string;
+  confidence: number;
+  evidence?: string;
+};
+
+type SegmentOutput = {
+  chunks: SegmentChunk[];
+  errors?: string[];
+};
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
@@ -64,6 +86,9 @@ const readPackageVersion = async (packageName?: string): Promise<string | null> 
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object";
+
+const resolveIngestModuleName = (): string =>
+  process.env.SOUSTACK_INGEST_MODULE ?? "soustack-ingest";
 
 const buildErrorList = (value: unknown): string[] => {
   if (!isRecord(value)) {
@@ -274,6 +299,123 @@ const buildIngestRequest = (input: IngestDocumentInput): Record<string, unknown>
   return request;
 };
 
+const parseSegmentInput = (input: Record<string, unknown>): { value?: SegmentInput; errors: string[] } => {
+  const errors: string[] = [];
+  const text = typeof input.text === "string" ? input.text : "";
+
+  if (!text) {
+    errors.push("text must be a non-empty string.");
+  }
+
+  let options: SegmentOptions | undefined;
+  if ("options" in input && input.options !== undefined) {
+    if (!isRecord(input.options)) {
+      errors.push("options must be an object when provided.");
+    } else {
+      options = {};
+
+      if ("maxChunks" in input.options) {
+        const value = input.options.maxChunks;
+        if (value === null || typeof value === "number") {
+          options.maxChunks = value as number | null;
+        } else if (value !== undefined) {
+          errors.push("options.maxChunks must be a number or null when provided.");
+        }
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { errors };
+  }
+
+  return {
+    errors,
+    value: {
+      text,
+      options
+    }
+  };
+};
+
+const resolveNormalizeStage = (
+  ingestModule: Record<string, unknown>
+): ((input: unknown) => Promise<unknown> | unknown) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.normalize,
+    ingestModule.normalizeText,
+    ingestModule.normalizeInput,
+    isRecord(defaultExport) ? defaultExport.normalize : undefined,
+    isRecord(defaultExport) ? defaultExport.normalizeText : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose a normalize stage.");
+  }
+
+  return handler as (input: unknown) => Promise<unknown> | unknown;
+};
+
+const resolveSegmentStage = (
+  ingestModule: Record<string, unknown>
+): ((input: unknown, options?: SegmentOptions) => Promise<unknown> | unknown) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.segment,
+    ingestModule.segmentText,
+    ingestModule.segmentLines,
+    isRecord(defaultExport) ? defaultExport.segment : undefined,
+    isRecord(defaultExport) ? defaultExport.segmentText : undefined,
+    isRecord(defaultExport) && isRecord(defaultExport.stages) ? defaultExport.stages.segment : undefined,
+    isRecord(ingestModule.stages) ? ingestModule.stages.segment : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose a segment stage.");
+  }
+
+  return handler as (input: unknown, options?: SegmentOptions) => Promise<unknown> | unknown;
+};
+
+const runNormalizeStage = async (normalize: (input: unknown) => Promise<unknown> | unknown, text: string) => {
+  try {
+    return await normalize(text);
+  } catch (error) {
+    return await normalize({ text });
+  }
+};
+
+const runSegmentStage = async (
+  segment: (input: unknown, options?: SegmentOptions) => Promise<unknown> | unknown,
+  normalized: unknown,
+  options?: SegmentOptions
+) => {
+  if (options === undefined) {
+    return await segment(normalized);
+  }
+
+  try {
+    return await segment(normalized, options);
+  } catch (error) {
+    return await segment({ text: normalized, options });
+  }
+};
+
+const extractSegmentChunks = (value: unknown): SegmentChunk[] => {
+  if (Array.isArray(value)) {
+    return value as SegmentChunk[];
+  }
+
+  if (isRecord(value) && Array.isArray(value.chunks)) {
+    return value.chunks as SegmentChunk[];
+  }
+
+  return [];
+};
+
 const tools: Record<string, ToolHandler> = {
   ping: async () => ({ pong: true }),
   "ingest.meta": async () => {
@@ -302,7 +444,7 @@ const tools: Record<string, ToolHandler> = {
     }
 
     try {
-      const ingestModule = (await import("soustack-ingest")) as Record<string, unknown>;
+      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
       const handler = resolveIngestHandler(ingestModule);
       const result = await handler(buildIngestRequest(parsed.value));
       return normalizeIngestResult(result, parsed.value);
@@ -310,6 +452,30 @@ const tools: Record<string, ToolHandler> = {
       return {
         ok: false,
         source: parsed.source,
+        errors: [error instanceof Error ? error.message : String(error)]
+      };
+    }
+  },
+  "ingest.segment": async (input) => {
+    const parsed = parseSegmentInput(input);
+    if (!parsed.value) {
+      return {
+        chunks: [],
+        errors: parsed.errors
+      };
+    }
+
+    try {
+      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
+      const normalize = resolveNormalizeStage(ingestModule);
+      const segment = resolveSegmentStage(ingestModule);
+      const normalized = await runNormalizeStage(normalize, parsed.value.text);
+      const segmented = await runSegmentStage(segment, normalized, parsed.value.options);
+      const chunks = extractSegmentChunks(segmented);
+      return { chunks };
+    } catch (error) {
+      return {
+        chunks: [],
         errors: [error instanceof Error ? error.message : String(error)]
       };
     }
