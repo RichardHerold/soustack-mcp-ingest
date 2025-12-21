@@ -66,6 +66,28 @@ type SegmentOutput = {
   errors?: string[];
 };
 
+type ExtractChunk = {
+  startLine: number;
+  endLine: number;
+  titleGuess?: string;
+};
+
+type ExtractInput = {
+  text: string;
+  chunk: ExtractChunk;
+};
+
+type IntermediateRecipe = {
+  title: string;
+  ingredients: string[];
+  instructions: string[];
+  source: {
+    startLine: number;
+    endLine: number;
+    evidence?: string;
+  };
+};
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
@@ -338,6 +360,66 @@ const parseSegmentInput = (input: Record<string, unknown>): { value?: SegmentInp
   };
 };
 
+const parseExtractInput = (input: Record<string, unknown>): { value?: ExtractInput; errors: string[] } => {
+  const errors: string[] = [];
+  const text = typeof input.text === "string" ? input.text : "";
+
+  if (!text) {
+    errors.push("text must be a non-empty string.");
+  }
+
+  const chunkValue = input.chunk;
+  if (!isRecord(chunkValue)) {
+    errors.push("chunk must be an object.");
+  }
+
+  const startLine = isRecord(chunkValue) ? chunkValue.startLine : undefined;
+  const endLine = isRecord(chunkValue) ? chunkValue.endLine : undefined;
+  const titleGuess = isRecord(chunkValue) ? chunkValue.titleGuess : undefined;
+
+  if (typeof startLine !== "number" || !Number.isFinite(startLine)) {
+    errors.push("chunk.startLine must be a number.");
+  } else if (startLine <= 0) {
+    errors.push("chunk.startLine must be greater than zero.");
+  }
+
+  if (typeof endLine !== "number" || !Number.isFinite(endLine)) {
+    errors.push("chunk.endLine must be a number.");
+  } else if (endLine <= 0) {
+    errors.push("chunk.endLine must be greater than zero.");
+  }
+
+  if (
+    typeof startLine === "number" &&
+    typeof endLine === "number" &&
+    Number.isFinite(startLine) &&
+    Number.isFinite(endLine) &&
+    startLine > endLine
+  ) {
+    errors.push("chunk.startLine must be less than or equal to chunk.endLine.");
+  }
+
+  if (titleGuess !== undefined && typeof titleGuess !== "string") {
+    errors.push("chunk.titleGuess must be a string when provided.");
+  }
+
+  if (errors.length > 0) {
+    return { errors };
+  }
+
+  return {
+    errors,
+    value: {
+      text,
+      chunk: {
+        startLine: startLine as number,
+        endLine: endLine as number,
+        titleGuess: titleGuess as string | undefined
+      }
+    }
+  };
+};
+
 const resolveNormalizeStage = (
   ingestModule: Record<string, unknown>
 ): ((input: unknown) => Promise<unknown> | unknown) => {
@@ -380,6 +462,29 @@ const resolveSegmentStage = (
   return handler as (input: unknown, options?: SegmentOptions) => Promise<unknown> | unknown;
 };
 
+const resolveExtractStage = (
+  ingestModule: Record<string, unknown>
+): ((chunk: ExtractChunk, lines: string[]) => Promise<unknown> | unknown) => {
+  const defaultExport = ingestModule.default;
+  const candidates = [
+    ingestModule.extract,
+    ingestModule.extractRecipe,
+    ingestModule.extractChunk,
+    isRecord(defaultExport) ? defaultExport.extract : undefined,
+    isRecord(defaultExport) ? defaultExport.extractRecipe : undefined,
+    isRecord(defaultExport) ? defaultExport.extractChunk : undefined,
+    isRecord(defaultExport) && isRecord(defaultExport.stages) ? defaultExport.stages.extract : undefined,
+    isRecord(ingestModule.stages) ? ingestModule.stages.extract : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack-ingest did not expose an extract stage.");
+  }
+
+  return handler as (chunk: ExtractChunk, lines: string[]) => Promise<unknown> | unknown;
+};
+
 const runNormalizeStage = async (normalize: (input: unknown) => Promise<unknown> | unknown, text: string) => {
   try {
     return await normalize(text);
@@ -411,6 +516,18 @@ const extractSegmentChunks = (value: unknown): SegmentChunk[] => {
 
   if (isRecord(value) && Array.isArray(value.chunks)) {
     return value.chunks as SegmentChunk[];
+  }
+
+  return [];
+};
+
+const resolveNormalizedLines = (normalized: unknown): string[] => {
+  if (typeof normalized === "string") {
+    return normalized.split("\n");
+  }
+
+  if (isRecord(normalized) && typeof normalized.text === "string") {
+    return normalized.text.split("\n");
   }
 
   return [];
@@ -476,6 +593,30 @@ const tools: Record<string, ToolHandler> = {
     } catch (error) {
       return {
         chunks: [],
+        errors: [error instanceof Error ? error.message : String(error)]
+      };
+    }
+  },
+  "ingest.extract": async (input) => {
+    const parsed = parseExtractInput(input);
+    if (!parsed.value) {
+      return {
+        intermediate: null,
+        errors: parsed.errors
+      };
+    }
+
+    try {
+      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
+      const normalize = resolveNormalizeStage(ingestModule);
+      const extract = resolveExtractStage(ingestModule);
+      const normalized = await runNormalizeStage(normalize, parsed.value.text);
+      const lines = resolveNormalizedLines(normalized);
+      const intermediate = await extract(parsed.value.chunk, lines);
+      return { intermediate: intermediate as IntermediateRecipe };
+    } catch (error) {
+      return {
+        intermediate: null,
         errors: [error instanceof Error ? error.message : String(error)]
       };
     }

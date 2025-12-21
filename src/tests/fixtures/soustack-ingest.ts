@@ -10,6 +10,23 @@ type SegmentChunk = {
   evidence?: string;
 };
 
+type ExtractChunk = {
+  startLine: number;
+  endLine: number;
+  titleGuess?: string;
+};
+
+type IntermediateRecipe = {
+  title: string;
+  ingredients: string[];
+  instructions: string[];
+  source: {
+    startLine: number;
+    endLine: number;
+    evidence?: string;
+  };
+};
+
 const resolveText = (input: string | { text: string }): string =>
   typeof input === "string" ? input : input.text;
 
@@ -69,7 +86,51 @@ export const segment = (
   return { chunks };
 };
 
+const stripListPrefix = (value: string): string => value.replace(/^([-*]|\d+\.)\s*/, "");
+
+export const extract = (chunk: ExtractChunk, lines: string[]): IntermediateRecipe => {
+  const chunkLines = lines.slice(chunk.startLine - 1, chunk.endLine);
+  const title = chunk.titleGuess ?? (chunkLines[0]?.trim() ?? "");
+  const ingredients: string[] = [];
+  const instructions: string[] = [];
+  let mode: "ingredients" | "instructions" | null = null;
+
+  chunkLines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (/^ingredients:?$/i.test(trimmed)) {
+      mode = "ingredients";
+      return;
+    }
+    if (/^instructions:?$/i.test(trimmed)) {
+      mode = "instructions";
+      return;
+    }
+    if (mode === "ingredients") {
+      ingredients.push(stripListPrefix(trimmed));
+      return;
+    }
+    if (mode === "instructions") {
+      instructions.push(stripListPrefix(trimmed));
+    }
+  });
+
+  return {
+    title,
+    ingredients,
+    instructions,
+    source: {
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      evidence: chunk.titleGuess
+    }
+  };
+};
+
 export default {
   normalize,
-  segment
+  segment,
+  extract
 };
