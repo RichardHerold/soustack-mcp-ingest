@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import readline from "node:readline";
 import type { ErrorDetails, ErrorResponse, Request, Response, SuccessResponse } from "./protocol.js";
 
@@ -8,8 +10,41 @@ type ServerOptions = {
   output: NodeJS.WritableStream;
 };
 
+const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
+
+const readPackageVersion = async (packageName?: string): Promise<string | null> => {
+  try {
+    if (packageName) {
+      const require = createRequire(import.meta.url);
+      const packagePath = require.resolve(`${packageName}/package.json`);
+      const content = await readFile(packagePath, "utf8");
+      return JSON.parse(content).version ?? null;
+    }
+
+    const content = await readFile(new URL("../package.json", import.meta.url), "utf8");
+    return JSON.parse(content).version ?? null;
+  } catch {
+    return null;
+  }
+};
+
 const tools: Record<string, ToolHandler> = {
-  ping: async () => ({ pong: true })
+  ping: async () => ({ pong: true }),
+  "ingest.meta": async () => {
+    const [mcpVersion, soustackIngestVersion, soustackVersion] = await Promise.all([
+      readPackageVersion(),
+      readPackageVersion("soustack-ingest"),
+      readPackageVersion("soustack")
+    ]);
+
+    return {
+      mcpVersion: mcpVersion ?? "unknown",
+      soustackIngestVersion,
+      soustackVersion,
+      supportedInputKinds: [...supportedInputKinds],
+      timestamp: new Date().toISOString()
+    };
+  }
 };
 
 const buildError = (id: string | null, error: ErrorDetails): ErrorResponse => ({
