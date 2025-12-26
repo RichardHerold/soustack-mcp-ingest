@@ -121,7 +121,12 @@ type ValidationResult = {
   errors: string[];
 };
 
+type SoustackValidator = (recipe: object) => Promise<unknown> | unknown;
+
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
+const canonicalSchema = "https://soustack.dev/schema/recipe-vNext.json";
+const profileLite = "soustack/recipe-lite";
+const defaultStackKey = "default";
 
 const readPackageVersion = async (packageName?: string): Promise<string | null> => {
   try {
@@ -145,6 +150,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const resolveIngestModuleName = (): string =>
   process.env.SOUSTACK_INGEST_MODULE ?? "soustack-ingest";
 
+const resolveSoustackModuleName = (): string =>
+  process.env.SOUSTACK_VALIDATOR_MODULE ?? process.env.SOUSTACK_MODULE ?? "soustack";
+
 const buildErrorList = (value: unknown): string[] => {
   if (!isRecord(value)) {
     return [];
@@ -155,7 +163,7 @@ const buildErrorList = (value: unknown): string[] => {
     return [];
   }
 
-  return errors.map((error) => String(error));
+  return errors.map((error) => String(error)).sort((left, right) => left.localeCompare(right));
 };
 
 const isEmitted = (value: unknown): value is IngestDocumentEmitted => {
@@ -215,10 +223,152 @@ const resolveIngestHandler = (
   return handler as (input: Record<string, unknown>) => Promise<unknown>;
 };
 
-const normalizeIngestResult = (
-  result: unknown,
+const resolveSoustackValidator = (soustackModule: Record<string, unknown>): SoustackValidator => {
+  const defaultExport = soustackModule.default;
+  const candidates = [
+    soustackModule.validateRecipe,
+    soustackModule.validate,
+    soustackModule.validateRecipePayload,
+    isRecord(defaultExport) ? defaultExport.validateRecipe : undefined,
+    isRecord(defaultExport) ? defaultExport.validate : undefined
+  ];
+
+  const handler = candidates.find((candidate) => typeof candidate === "function");
+  if (!handler) {
+    throw new Error("soustack did not expose a validator.");
+  }
+
+  return handler as SoustackValidator;
+};
+
+const sortObjectKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortObjectKeys(entry));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return Object.keys(value)
+    .sort((left, right) => left.localeCompare(right))
+    .reduce<Record<string, unknown>>((accumulator, key) => {
+      accumulator[key] = sortObjectKeys(value[key]);
+      return accumulator;
+    }, {});
+};
+
+const resolveStacksMap = (value: unknown, slug?: string): Record<string, unknown> => {
+  if (isRecord(value)) {
+    return sortObjectKeys(value) as Record<string, unknown>;
+  }
+
+  if (Array.isArray(value)) {
+    const map: Record<string, unknown> = {};
+    value.map((entry) => String(entry)).forEach((entry) => {
+      map[entry] = true;
+    });
+    return sortObjectKeys(map) as Record<string, unknown>;
+  }
+
+  const key = slug && slug.trim() ? slug : defaultStackKey;
+  return { [key]: true };
+};
+
+const canonicalizeRecipe = (recipe: object, slug?: string): Record<string, unknown> => {
+  const record = isRecord(recipe) ? recipe : {};
+  const normalized: Record<string, unknown> = {};
+
+  normalized.$schema =
+    typeof record.$schema === "string" && record.$schema.trim() ? record.$schema : canonicalSchema;
+
+  normalized.profile =
+    typeof record.profile === "string" && record.profile.trim() ? record.profile : profileLite;
+
+  normalized.stacks = resolveStacksMap(record.stacks, slug);
+
+  const remainingEntries = Object.entries(record).filter(
+    ([key]) => key !== "$schema" && key !== "profile" && key !== "stacks"
+  );
+
+  Object.assign(normalized, sortObjectKeys(Object.fromEntries(remainingEntries)) as object);
+  return normalized;
+};
+
+const ensureSlug = (slug: unknown, name: unknown, sourcePath: string): string => {
+  const slugify = (value: string): string =>
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+
+  if (typeof slug === "string" && slug.trim()) {
+    const normalized = slugify(slug);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  if (typeof name === "string" && name.trim()) {
+    const normalized = slugify(name);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const match = sourcePath.split(/[\\/]/).filter(Boolean).pop();
+  if (match) {
+    const normalized = slugify(match.replace(/\.[^.]+$/, ""));
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "recipe";
+};
+
+const normalizeDocumentRecipes = (
+  value: unknown,
   request: IngestDocumentInput
-): IngestDocumentOutput => {
+): IngestDocumentRecipe[] => {
+  const recipes = extractRecipes(value).map((entry) => {
+    const slug = ensureSlug(entry.slug, entry.name, request.inputPath);
+    const name = typeof entry.name === "string" && entry.name.trim() ? entry.name : slug;
+    const recipe = canonicalizeRecipe(entry.recipe, slug);
+    return { ...entry, name, slug, recipe } satisfies IngestDocumentRecipe;
+  });
+
+  return recipes.sort((left, right) => left.slug.localeCompare(right.slug) || left.name.localeCompare(right.name));
+};
+
+const validateDocumentRecipes = async (
+  recipes: IngestDocumentRecipe[],
+  validator?: SoustackValidator
+): Promise<string[]> => {
+  if (!validator) {
+    return [];
+  }
+
+  const errors: string[] = [];
+
+  for (const recipe of recipes) {
+    const result = normalizeValidationResult(await validator(recipe.recipe));
+    if (!result.ok) {
+      const prefix = `[${recipe.slug}] `;
+      const messages = result.errors.length > 0 ? result.errors : ["Validation failed."];
+      errors.push(...messages.map((message) => `${prefix}${message}`));
+    }
+  }
+
+  return errors;
+};
+
+const normalizeIngestResult = async (
+  result: unknown,
+  request: IngestDocumentInput,
+  validator?: SoustackValidator
+): Promise<IngestDocumentOutput> => {
   const source = { inputPath: request.inputPath };
   const emitFiles = request.options?.emitFiles ?? Boolean(request.outDir);
   const returnRecipes = request.options?.returnRecipes ?? true;
@@ -239,13 +389,21 @@ const normalizeIngestResult = (
   };
 
   if (returnRecipes) {
-    output.recipes = extractRecipes(result);
+    output.recipes = normalizeDocumentRecipes(result, request);
   }
 
   if (emitFiles) {
     const emitted = extractEmitted(result);
     if (emitted) {
       output.emitted = emitted;
+    }
+  }
+
+  if (output.recipes) {
+    const validationErrors = await validateDocumentRecipes(output.recipes, validator);
+    if (validationErrors.length > 0) {
+      output.ok = false;
+      output.errors = [...output.errors, ...validationErrors];
     }
   }
 
@@ -768,8 +926,10 @@ const tools: Record<string, ToolHandler> = {
     try {
       const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
       const handler = resolveIngestHandler(ingestModule);
+      const soustackModule = (await import(resolveSoustackModuleName())) as Record<string, unknown>;
+      const validator = resolveSoustackValidator(soustackModule);
       const result = await handler(buildIngestRequest(parsed.value));
-      return normalizeIngestResult(result, parsed.value);
+      return await normalizeIngestResult(result, parsed.value, validator);
     } catch (error) {
       return {
         ok: false,
@@ -839,7 +999,8 @@ const tools: Record<string, ToolHandler> = {
       const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
       const toSoustack = resolveToSoustackStage(ingestModule);
       const recipe = await toSoustack(parsed.value.intermediate, parsed.value.options);
-      return { recipe: recipe as object } as ToSoustackOutput;
+      const slug = ensureSlug(parsed.value.intermediate.title, parsed.value.intermediate.title, parsed.value.options?.sourcePath ?? "");
+      return { recipe: canonicalizeRecipe(recipe as object, slug) } as ToSoustackOutput;
     } catch (error) {
       return {
         recipe: null,
@@ -857,8 +1018,8 @@ const tools: Record<string, ToolHandler> = {
     }
 
     try {
-      const ingestModule = (await import(resolveIngestModuleName())) as Record<string, unknown>;
-      const validate = resolveValidateStage(ingestModule);
+      const soustackModule = (await import(resolveSoustackModuleName())) as Record<string, unknown>;
+      const validate = resolveSoustackValidator(soustackModule);
       const result = await validate(parsed.value.recipe);
       return normalizeValidationResult(result);
     } catch (error) {

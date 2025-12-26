@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { startServer } from "../server.js";
 
 test("ingest.validate returns ok false for invalid recipes", async () => {
-  const previousModule = process.env.SOUSTACK_INGEST_MODULE;
-  process.env.SOUSTACK_INGEST_MODULE = new URL("./fixtures/soustack-ingest.js", import.meta.url).href;
+  const previousSoustackModule = process.env.SOUSTACK_VALIDATOR_MODULE;
+  process.env.SOUSTACK_VALIDATOR_MODULE = new URL("./fixtures/soustack.js", import.meta.url).href;
 
   try {
     const input = new PassThrough();
@@ -51,12 +51,17 @@ test("ingest.validate returns ok false for invalid recipes", async () => {
     assert.equal(response.ok, true);
     assert.ok(response.output);
     assert.equal(response.output.ok, false);
-    assert.deepEqual(response.output.errors, ["name is required."]);
+    assert.deepEqual(response.output.errors, [
+      "$schema must match soustack vNext.",
+      "name is required.",
+      "profile must be soustack/recipe-lite.",
+      "stacks must contain at least one entry."
+    ]);
   } finally {
-    if (previousModule === undefined) {
-      delete process.env.SOUSTACK_INGEST_MODULE;
+    if (previousSoustackModule === undefined) {
+      delete process.env.SOUSTACK_VALIDATOR_MODULE;
     } else {
-      process.env.SOUSTACK_INGEST_MODULE = previousModule;
+      process.env.SOUSTACK_VALIDATOR_MODULE = previousSoustackModule;
     }
   }
 });

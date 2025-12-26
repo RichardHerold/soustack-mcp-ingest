@@ -31,6 +31,35 @@ type ToSoustackOptions = {
   sourcePath?: string;
 };
 
+type IngestDocumentOptions = {
+  returnRecipes?: boolean;
+  emitFiles?: boolean;
+  maxRecipes?: number | null;
+  strictValidation?: boolean;
+};
+
+type IngestDocumentInput = {
+  inputPath: string;
+  emitFiles?: boolean;
+  returnRecipes?: boolean;
+  maxRecipes?: number | null;
+  strictValidation?: boolean;
+};
+
+type IngestDocumentResult = {
+  ok: boolean;
+  recipes?: Array<{ name: string; slug: string; recipe: Record<string, unknown> }>;
+  emitted?: { outDir: string; indexPath: string; recipesDir: string; count: number };
+  errors?: string[];
+};
+
+const slugify = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "") || "recipe";
+
 const resolveText = (input: string | { text: string }): string =>
   typeof input === "string" ? input : input.text;
 
@@ -173,10 +202,54 @@ export const validate = (
   };
 };
 
+export const ingestDocument = async ({
+  inputPath,
+  emitFiles,
+  returnRecipes = true,
+  maxRecipes
+}: IngestDocumentInput): Promise<IngestDocumentResult> => {
+  const { readFile } = await import("node:fs/promises");
+  const text = await readFile(inputPath, "utf8");
+  const normalized = normalize(text);
+  const lines = normalized.split("\n");
+  const chunk = {
+    startLine: 1,
+    endLine: lines.length,
+    titleGuess: lines.find((line) => Boolean(line.trim())) ?? "Recipe"
+  };
+  const recipes = (() => {
+    if (maxRecipes === 0) {
+      return [];
+    }
+    const intermediate = extract(chunk, lines);
+    const recipe = toSoustack(intermediate, { sourcePath: inputPath });
+    const slug = slugify(recipe.name);
+    return [{ name: recipe.name, slug, recipe }];
+  })();
+
+  const response: IngestDocumentResult = { ok: true };
+
+  if (returnRecipes) {
+    response.recipes = recipes;
+  }
+
+  if (emitFiles) {
+    response.emitted = {
+      outDir: "/tmp/out",
+      indexPath: "/tmp/out/index.json",
+      recipesDir: "/tmp/out/recipes",
+      count: recipes.length
+    };
+  }
+
+  return response;
+};
+
 export default {
   normalize,
   segment,
   extract,
   toSoustack,
-  validate
+  validate,
+  ingestDocument
 };
