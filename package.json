@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/tests/**/*.js",
+    "test": "npm run build && node --test \"dist/tests/**/*.js\" \"dist/tests/*.js\"",
     "smoke": "node scripts/smoke.mjs"
   },
   "engines": {
