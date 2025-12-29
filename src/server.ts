@@ -124,7 +124,7 @@ type ValidationResult = {
 type SoustackValidator = (recipe: object) => Promise<unknown> | unknown;
 
 const supportedInputKinds = ["text", "rtf", "rtfd.zip", "rtfd-dir"] as const;
-const canonicalSchema = "https://soustack.dev/schema/recipe-vNext.json";
+const canonicalSchema = "https://spec.soustack.org/soustack.schema.json";
 const profileLite = "soustack/recipe-lite";
 const defaultStackKey = "default";
 
@@ -279,8 +279,7 @@ const canonicalizeRecipe = (recipe: object, slug?: string): Record<string, unkno
   const record = isRecord(recipe) ? recipe : {};
   const normalized: Record<string, unknown> = {};
 
-  normalized.$schema =
-    typeof record.$schema === "string" && record.$schema.trim() ? record.$schema : canonicalSchema;
+  normalized.$schema = canonicalSchema;
 
   normalized.profile =
     typeof record.profile === "string" && record.profile.trim() ? record.profile : profileLite;
@@ -910,6 +909,7 @@ const tools: Record<string, ToolHandler> = {
       soustackIngestVersion,
       soustackVersion,
       supportedInputKinds: [...supportedInputKinds],
+      canonicalSchema,
       timestamp: new Date().toISOString()
     };
   },

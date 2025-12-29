@@ -64,7 +64,7 @@ test("ingest.toSoustack maps intermediate recipe to soustack recipe", async () =
     assert.equal(recipe.name, "Test Salad");
     assert.ok(Array.isArray(recipe.ingredients));
     assert.ok(Array.isArray(recipe.instructions));
-    assert.equal(recipe.$schema, "https://soustack.dev/schema/recipe-vNext.json");
+    assert.equal(recipe.$schema, "https://spec.soustack.org/soustack.schema.json");
     assert.equal(recipe.profile, "soustack/recipe-lite");
     assert.deepEqual(recipe.stacks, { "test-salad": true });
     assert.ok("x-ingest" in recipe);
