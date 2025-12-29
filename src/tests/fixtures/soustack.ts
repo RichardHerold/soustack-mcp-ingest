@@ -1,5 +1,12 @@
-const canonicalSchema = "https://soustack.dev/schema/recipe-vNext.json";
+const canonicalSchema = "https://spec.soustack.org/soustack.schema.json";
 const profileLite = "soustack/recipe-lite";
+
+// Legacy schema hosts that should be accepted for validation
+const legacySchemaHosts = [
+  "https://soustack.dev/schema/",
+  "https://soustack.spec/",
+  "https://soustack.ai/schemas/"
+];
 
 type ValidationResult = {
   ok: boolean;
@@ -8,6 +15,17 @@ type ValidationResult = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const isCanonicalOrLegacySchema = (schema: unknown): boolean => {
+  if (typeof schema !== "string") {
+    return false;
+  }
+  if (schema === canonicalSchema) {
+    return true;
+  }
+  // Accept legacy schema hosts (delegate to soustack-core validator if used)
+  return legacySchemaHosts.some((host) => schema.startsWith(host));
+};
 
 const performValidation = (recipe: unknown): ValidationResult => {
   if (!isRecord(recipe)) {
@@ -20,7 +38,7 @@ const performValidation = (recipe: unknown): ValidationResult => {
     errors.push("name is required.");
   }
 
-  if (recipe.$schema !== canonicalSchema) {
+  if (!isCanonicalOrLegacySchema(recipe.$schema)) {
     errors.push("$schema must match soustack vNext.");
   }
 

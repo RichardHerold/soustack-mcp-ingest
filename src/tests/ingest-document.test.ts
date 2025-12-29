@@ -4,7 +4,7 @@ import test from "node:test";
 import { startServer } from "../server.js";
 import path from "node:path";
 
-const canonicalSchema = "https://soustack.dev/schema/recipe-vNext.json";
+const canonicalSchema = "https://spec.soustack.org/soustack.schema.json";
 
 test("ingest.document emits canonical recipes and validates each one", async () => {
   const previousIngestModule = process.env.SOUSTACK_INGEST_MODULE;

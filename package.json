@@ -9,8 +9,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test \"dist/tests/**/*.js\" \"dist/tests/*.js\"",
-    "smoke": "node scripts/smoke.mjs"
+    "test": "npm run build && npm run guard:canonical-host && node --test dist/tests/*.test.js",
+    "smoke": "node scripts/smoke.mjs",
+    "guard:canonical-host": "node scripts/guard-canonical-host.mjs"
   },
   "engines": {
     "node": ">=18"

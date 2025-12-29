@@ -37,5 +37,6 @@ test("ingest.meta returns expected shape", async () => {
   assert.ok("soustackIngestVersion" in response.output);
   assert.ok("soustackVersion" in response.output);
   assert.deepEqual(response.output.supportedInputKinds, ["text", "rtf", "rtfd.zip", "rtfd-dir"]);
+  assert.equal(response.output.canonicalSchema, "https://spec.soustack.org/soustack.schema.json");
   assert.equal(typeof response.output.timestamp, "string");
 });
